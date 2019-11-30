@@ -1,0 +1,123 @@
+name: Lockdown Tests
+on: [push]
+jobs:
+  test:
+    name: Tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: 
+        - "ubuntu-latest"
+        - "ubuntu-16.04"
+        - "windows-latest"
+        - "macos-latest"
+    steps:
+    - name: Set up Go 1.13
+      uses: actions/setup-go@v1
+      with:
+        go-version: 1.13
+      id: go
+
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v1
+
+    - name: Get Lockdown Deps
+      run: |
+        go get -v -t -d ./...
+
+    - name: Install Lockdown
+      run: |
+        go build -o ./test_build_lockdown -tags notty ./
+        go build -o ./test_build_lddev ./lddev
+
+    - name: Run Lockdown unit tests/benchmarks/coverage
+      run: |
+        go test -v -bench . -benchmem -benchtime 10s -cover ./...
+
+    - name: Generate random file
+      env:
+        CURR_OS: ${{ matrix.os }}
+      shell: bash
+      run: |
+        randfile="./randfile_$CURR_OS"
+        hashfile="./hashfile_$CURR_OS"
+        ./test_build_lddev -randfile 1024 "$randfile"
+        ./test_build_lddev -hash "$hashfile" "$randfile"
+        ./test_build_lockdown -e -password testpassword "$randfile"
+
+    - name: Upload encrypted file
+      uses: actions/upload-artifact@v1
+      with:
+        name: cross_decrypt_files
+        path: randfile_${{ matrix.os }}.lkd
+
+    - name: Upload hash file
+      uses: actions/upload-artifact@v1
+      with:
+        name: cross_decrypt_files
+        path: hashfile_${{ matrix.os }}
+
+  cross_decrypt:
+    name: Test cross os decryption
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: 
+        - "ubuntu-latest"
+        - "ubuntu-16.04"
+        - "windows-latest"
+        - "macos-latest"
+    steps:
+    - name: Set up Go 1.13
+      uses: actions/setup-go@v1
+      with:
+        go-version: 1.13
+      id: go
+
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v1
+
+    - name: Get Lockdown Deps
+      run: |
+        go get -v -t -d ./...
+
+    - name: Install Lockdown
+      run: |
+        go build -o ./test_build_lockdown -tags notty ./
+        go build -o ./test_build_lddev ./lddev
+
+    #download encrypted files
+    - name: Download ubuntu-latest
+      uses: actions/download-artifact@v1
+      with:
+        name: cross_decrypt_files
+
+    #test decryption matches hash
+    - name: Decrypt cross encrypted files
+      shell: bash
+      run: |
+        OSES=()
+        OSES+=('ubuntu-latest')
+        OSES+=('ubuntu-16.04')
+        OSES+=('windows-latest')
+        OSES+=('macos-latest')
+
+        for os in ${OSES[@]}; do
+          randfile="./cross_decrypt_files/randfile_$os"
+          encrandfile="$randfile.lkd"
+          hashfile="./cross_decrypt_files/hashfile_$os"
+
+          ./test_build_lockdown -d -password testpassword "$encrandfile"
+          if [ ! $? -eq 0 ]; then
+            echo "failed to decrypt $encrandfile"
+            exit 1
+          fi
+          echo "succesfully decrypted $encrandfile"
+
+          if [ ! "$(./test_build_lddev -hashcompare $hashfile $randfile)" = "match" ]; then
+            echo "hash comparison failed for $os - $randfile"
+            exit 1
+          fi
+          echo "hashes match: SHA256($randfile) == $hashfile"
+        done
