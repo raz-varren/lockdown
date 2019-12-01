@@ -25,6 +25,25 @@ jobs:
       run: |
         go get -v -t -d ./...
 
+    - name: Ensure the code is formatted
+      shell: bash
+      env:
+        CURR_OS: ${{ matrix.os }}
+      run: |
+        if [ "$CURR_OS" = "windows-latest" ]; then 
+          echo "skipping this step, as windows uses different line endings"
+          exit 0
+        fi
+
+        unformatted="$(go fmt ./...)"
+        if [ ! "$unformatted" = "" ]; then 
+          echo "the following files were not fmted:"
+          printf "$unformatted"
+          echo ""
+          exit 1
+        fi
+        echo "code is properly formatted"
+
     - name: Install Lockdown
       run: |
         go build -o ./test_build_lockdown -tags notty ./
@@ -88,7 +107,7 @@ jobs:
         go build -o ./test_build_lddev ./lddev
 
     #download encrypted files
-    - name: Download ubuntu-latest
+    - name: Download encrypted files
       uses: actions/download-artifact@v1
       with:
         name: cross_decrypt_files
